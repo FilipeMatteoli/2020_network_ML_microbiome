@@ -1,0 +1,233 @@
+library(phyloseq)
+library(indicspecies)
+library(igraph)
+library(RColorBrewer)
+library(ggraph)
+library(metagMisc)
+library(indicspecies)
+library(igraph)
+library(qgraph)
+library(vegan)
+library(MCL)
+library(metagMisc)
+library(ggplot2)
+library(dplyr)
+library(magrittr)
+library(scales)
+library(grid)
+library(reshape2)
+library(randomForest)
+library(caret)
+
+##### Import Data #####
+ps <- import_biom(feature-table.biom)
+
+#####Indicator species analysis #####
+#filter raw ps object
+ps.filt <- phyloseq_filter_prevalence(ps, prev.trh = 0.20, abund.trh = 100, threshold_condition = "AND", abund.type = "total")
+
+#get OTU and tax table from ps filtered object
+OTU1 = as(otu_table(ps.filt), "matrix")
+OTU1.trans <- as.data.frame(t(OTU1))
+design_16s <- read.table("./metadata_2years.txt", header=T, row.names=1, stringsAsFactors=F, na.strings="NA")
+indic_soil_groups_16s <- design_16s$Treatment
+length(unique(indic_soil_groups_16s))
+
+indicatorsp_soil_16s <- multipatt(OTU1.trans,indic_soil_groups_16s,func = "r.g",control=how(nperm=9999))#calculate indicspecies
+summary(indicatorsp_soil_16s,alpha=1,indvalcomp=T)
+indic_soil_df_16s <- indicatorsp_soil_16s$sign
+
+MC_16s <- as.matrix(indic_soil_df_16s[which(indic_soil_df_16s$s.MC == 1 & indic_soil_df_16s$p.value < 0.05),])
+MN_16s <- as.matrix(indic_soil_df_16s[which(indic_soil_df_16s$s.MN == 1 & indic_soil_df_16s$p.value < 0.05),])
+MO_16s <- as.matrix(indic_soil_df_16s[which(indic_soil_df_16s$s.MO == 1 & indic_soil_df_16s$p.value < 0.05),])
+MT_16s <- as.matrix(indic_soil_df_16s[which(indic_soil_df_16s$s.MT == 1 & indic_soil_df_16s$p.value < 0.05),])
+soil_r_values_16s <- rbind(MC_16s,MN_16s,MO_16s,MT_16s)
+colnames(soil_r_values_16s)[1:4] <-c("MC","MN","MO","MT")
+
+## Construct node table for bulk soil bacteria communities from indicator species data
+soil_bi_finaltable_16s <- data.frame(from= c(rep("MC",length(which(soil_r_values_16s[,"MC"]==1))),
+                                         rep("MN",length(which(soil_r_values_16s[,"MN"]==1))),
+                                         rep("MT",length(which(soil_r_values_16s[,"MO"]==1))),
+                                         rep("MO",length(which(soil_r_values_16s[,"MT"]==1)))),
+                                 to= c(rownames(soil_r_values_16s)[which(soil_r_values_16s[,"MC"]==1)],
+                                       rownames(soil_r_values_16s)[which(soil_r_values_16s[,"MN"]==1)],
+                                       rownames(soil_r_values_16s)[which(soil_r_values_16s[,"MO"]==1)],
+                                       rownames(soil_r_values_16s)[which(soil_r_values_16s[,"MT"]==1)]),
+                                 r= c(soil_r_values_16s[which(soil_r_values_16s[,"MC"]==1),"stat"],
+                                      soil_r_values_16s[which(soil_r_values_16s[,"MN"]==1),"stat"],
+                                      soil_r_values_16s[which(soil_r_values_16s[,"MO"]==1),"stat"],
+                                      soil_r_values_16s[which(soil_r_values_16s[,"MT"]==1),"stat"]))
+
+
+net_16s <- graph.data.frame(soil_bi_finaltable_16s,directed=F)
+net_16s <- simplify(net_16s, remove.multiple=T, remove.loops=T)
+net_16s #get number of nodes and edges
+UN-- 442 794 --
+
+#add taxonomy as attribute
+V(net_16s)$taxonomy <- as.character(node_taxonomy$taxonomy)
+
+pal <- brewer.pal(length(unique(V(net_16s)$taxonomy)), "Dark2")
+plot(net_16s, layout=l, vertex.color=pal[as.numeric(as.factor(vertex_attr(net_16s, "taxonomy")))],
+     edge.arrow.size=0.5, 
+     vertex.label=V(net_16s)$name, vertex.label.cex = 0.3,
+     vertex.shape="circle", 
+     vertex.size=4, 
+     vertex.label.color="black", 
+     edge.width=0.5)
+
+##Farming system networks
+ps <- import_biom(feature-table.biom)
+ps.filt <- phyloseq_filter_prevalence(ps, prev.trh = 0.2, abund.trh = 100, threshold_condition = "AND", abund.type = "total")
+write.table(ps.filt.otu, "./ps.filt.txt")
+
+#Networks computed through Metagenomenets using Pearson correlation p<0.01, minimum of 30 reads. Resulting in 540 features.
+#Abundancies normalized by total sum scaling and tranformed to centered log-ratio (clr)
+
+#Import MC_edgelist file from Metagenomenets
+MC_edgelist <- read.table("./MC_edgelist", header = FALSE)#read file
+MC_edgelist.matrix <- as.matrix(MC_edgelist)
+MC_graph <- graph_from_edgelist(MC_edgelist.matrix, directed = FALSE)
+MC_graph_degree <- degree(MC_graph, mode = "total") #calculate degree
+V(MC_graph)$degree <- MC_graph_degree[match(V(MC_graph)$name, names(MC_graph_degree))]#match degre list to node name
+
+#MC modules
+MC_modules_louvain <- cluster_louvain(MC_graph)
+#prepare attributes to plot highlight
+ToHighlight = c(1) #membership id to highlight
+PCol = rep("lightgray", length(unique(MC_modules_louvain$membership)))
+PCol[ToHighlight] = rainbow(length(ToHighlight))
+new_cols <- PCol[membership(MC_modules_louvain)]
+HCol = rep(NA, length(unique(MC_modules_louvain$membership)))
+HCol[ToHighlight] = rainbow(length(ToHighlight), alpha=0.15)
+HCol[grepl('#FF000026', HCol)] <- 'orange' #HCol controls the highlight of module
+new_cols[grepl('#FF0000FF', new_cols)] <- 'lightgray'#set back node color to gray
+
+#define layout
+e <- get.edgelist(MC_graph,names=FALSE)
+l1 <- qgraph.layout.fruchtermanreingold(e,vcount=vcount(MC_graph),
+      area=8*(vcount(MC_graph)^2),repulse.rad=(vcount(MC_graph)^3.1))
+
+#plot network
+
+plot(MC_modules_louvain, MC_graph, col=new_cols, mark.border=HCol, mark.col=HCol, layout=l1, vertex.label = ifelse(V(MC_graph)$degree>=50, V(MC_graph)$name, NA), vertex.size=ifelse(V(MC_graph)$degree>=50, 3,3), edge.color="grey70", vertex.label.cex = 0.5)
+
+#Import MT_edgelist file from Metagenomenets
+MT_edgelist <- read.table("/media/filipe/3D0C60B67437F476/ESALQ_dados/milho_merged_16s/metagenomenets/output/MT_edgelist", header = FALSE)#read file
+MT_edgelist.matrix <- as.matrix(MT_edgelist)
+MT_graph <- graph_from_edgelist(MT_edgelist.matrix, directed = FALSE)
+MT_graph_degree <- degree(MT_graph, mode = "total") #calculate degree
+V(MT_graph)$degree <- MT_graph_degree[match(V(MT_graph)$name, names(MT_graph_degree))]#match degre list to node name
+MT_graph <- delete.vertices(MT_graph, V(MT_graph)[degree(MT_graph)<=5])#delete less relevant nodes to improve visualization
+
+#MT modules
+MT_modules_louvain <- cluster_louvain(MT_graph)
+
+#prepare attributes to plot highlight
+ToHighlight = c(1,5,6,7) #membership id to highlight
+PCol = rep("lightgray", length(unique(MT_modules_louvain$membership)))
+PCol[ToHighlight] = rainbow(length(ToHighlight))
+new_cols <- PCol[membership(MT_modules_louvain)]
+HCol = rep(NA, length(unique(MT_modules_louvain$membership)))
+HCol[ToHighlight] = rainbow(length(ToHighlight), alpha=0.15)
+
+new_cols[grepl('#FF0000FF', new_cols)] <- 'lightgray'#set back node color to gray
+new_cols[grepl('#00FF00FF', new_cols)] <- 'lightgray'#set back node color to gray
+new_cols[grepl('#0000FFFF', new_cols)] <- 'lightgray'#set back node color to gray
+new_cols[grepl('#00FFFFFF', new_cols)] <- 'lightgray'#set back node color to gray
+
+#define layout
+e <- get.edgelist(MT_graph,names=FALSE)
+l <- qgraph.layout.fruchtermanreingold(e,vcount=vcount(MT_graph))
+
+plot(MT_modules_louvain, MT_graph, col=new_cols, mark.border=HCol, mark.col=HCol, layout=l, vertex.label = ifelse(V(MT_graph)$degree>=50, V(MT_graph)$name, NA), vertex.size=ifelse(V(MT_graph)$degree>=50, 3,3), edge.color="grey70", vertex.label.cex = 0.5)
+
+#Import MN_edgelist file from Metagenomenets
+MN_edgelist <- read.table("/media/filipe/3D0C60B67437F476/ESALQ_dados/milho_merged_16s/metagenomenets/output/MN_edgelist", header = FALSE)#read file
+MN_edgelist.matrix <- as.matrix(MN_edgelist)
+MN_graph <- graph_from_edgelist(MN_edgelist.matrix, directed = FALSE)
+MN_graph_degree <- degree(MN_graph, mode = "total") #calculate degree
+V(MN_graph)$degree <- MN_graph_degree[match(V(MN_graph)$name, names(MN_graph_degree))]#match degre list to node name
+MN_graph <- delete.vertices(MN_graph, V(MN_graph)[degree(MN_graph)<=5]) #delete less relevant nodes to improve visualization
+
+#MN modules
+MN_modules_louvain <- cluster_louvain(MN_graph)
+
+#prepare attributes to plot highlight
+ToHighlight = c(1,2,5) #membership id to highlight
+PCol = rep("lightgray", length(unique(MT_modules_louvain$membership)))
+PCol[ToHighlight] = rainbow(length(ToHighlight))
+new_cols <- PCol[membership(MN_modules_louvain)]
+HCol = rep(NA, length(unique(MN_modules_louvain$membership)))
+HCol[ToHighlight] = rainbow(length(ToHighlight), alpha=0.15)
+
+new_cols[grepl('#0000FFFF', new_cols)] <- 'lightgray'#set back node color to gray
+new_cols[grepl('#00FF00FF', new_cols)] <- 'lightgray'#set back node color to gray
+new_cols[grepl('#FF0000FF', new_cols)] <- 'lightgray'#set back node color to gray
+
+e <- get.edgelist(MN_graph,names=FALSE)
+l <- qgraph.layout.fruchtermanreingold(e,vcount=vcount(MN_graph))
+
+plot(MN_modules_louvain, MN_graph, col=new_cols, mark.border=HCol, mark.col=HCol, layout=l, vertex.label = ifelse(V(MN_graph)$degree>=50, V(MN_graph)$name, NA), vertex.size=ifelse(V(MN_graph)$degree>=50, 3,3), edge.color="grey70", vertex.label.cex = 0.5)
+
+
+#Import MO_edgelist file from Metagenomenets
+MO_edgelist <- read.table("/media/filipe/3D0C60B67437F476/ESALQ_dados/milho_merged_16s/metagenomenets/output/MO_edgelist", header = FALSE)#read file
+MO_edgelist.matrix <- as.matrix(MO_edgelist)
+MO_graph <- graph_from_edgelist(MO_edgelist.matrix, directed = FALSE)
+MO_graph_degree <- degree(MO_graph, mode = "total") #calculate degree
+V(MO_graph)$degree <- MO_graph_degree[match(V(MO_graph)$name, names(MO_graph_degree))]#match degre list to node name
+MO_graph <- delete.vertices(MO_graph, V(MO_graph)[degree(MO_graph)<=5]) #delete less relevant nodes to improve visualization
+
+#MO modules
+MO_modules_louvain <- cluster_louvain(MO_graph)
+
+#prepare attributes to plot highlight
+ToHighlight = c(1) #membership id to highlight
+PCol = rep("lightgray", length(unique(MO_modules_louvain$membership)))
+PCol[ToHighlight] = rainbow(length(ToHighlight))
+new_cols <- PCol[membership(MO_modules_louvain)]
+HCol = rep(NA, length(unique(MO_modules_louvain$membership)))
+HCol[ToHighlight] = rainbow(length(ToHighlight), alpha=0.15)
+
+new_cols[grepl('#FF0000FF', new_cols)] <- 'lightgray'#set back node color to gray
+
+e <- get.edgelist(MO_graph,names=FALSE)
+l <- qgraph.layout.fruchtermanreingold(e,vcount=vcount(MO_graph))
+
+plot(MO_modules_louvain, MO_graph, col=new_cols, mark.border=HCol, mark.col=HCol, layout=l, vertex.label = ifelse(V(MO_graph)$degree>=50, V(MO_graph)$name, NA), vertex.size=ifelse(V(MO_graph)$degree>=50, 3,3), edge.color="grey70", vertex.label.cex = 0.5)
+
+#Random forest models
+#####Using 50% of samples to train farming system model
+#input indicator ASVs for training
+indicator.50.training <- read.table("./train_indicspecies_50percent")
+
+#input 50% samples all ASVs data for validation
+#as tables are too big to transpose in R, use transposer script in bash
+perl transposer.pl 16S_ASV_farming.txt > 16S_ASV_farming_transposed
+grep -Fwf lines_4_validationfile 16S_ASV_farming_transposed > validation_50percent
+indicator.50.validation <- read.table("./validation_50percent")
+
+#run rf model
+indicator.50.rf.data <- randomForest(formula = farming ~ ., data = indicator.50.training,ntree=1000, importance = TRUE) 
+indicator.50.prediction <- predict(indicator.50.rf.data,indicator.50.validation)
+table(observed=indicator.50.validation[,1],predicted=indicator.50.prediction)
+
+#####Using 50% of samples to train farming system-year model
+#input indicator ASVs for training
+indicator.TY.50.training <- read.table("./TY_train_indicspecies_50percent")
+
+#input 50% samples all ASVs data for validation
+perl transposer.pl 16S_ASV_treatyear > 16S_ASV_treatyear.transposed
+grep -Fwf lines_4_validationfile_TY 16S_ASV_treatyear.transposed > TY_validation_50percent
+indicator.TY.50.validation <- read.table("./TY_validation_50percent")
+
+#run rf model
+indicator.TY.50.rf.data <- randomForest(formula = treatyear ~ ., data = indicator.TY.50.training,ntree=1000, importance = TRUE) 
+indicator.TY.50.prediction <- predict(indicator.TY.50.rf.data,indicator.TY.50.validation)
+table(observed=indicator.TY.50.validation[,1],predicted=indicator.TY.50.prediction)
+
+
+varImpPlot(indicator.50.rf.data)
+varImpPlot(indicator.TY.50.rf.data)
+
