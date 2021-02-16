@@ -113,7 +113,7 @@ l1 <- qgraph.layout.fruchtermanreingold(e,vcount=vcount(MC_graph),
 plot(MC_modules_louvain, MC_graph, col=new_cols, mark.border=HCol, mark.col=HCol, layout=l1, vertex.label = ifelse(V(MC_graph)$degree>=50, V(MC_graph)$name, NA), vertex.size=ifelse(V(MC_graph)$degree>=50, 3,3), edge.color="grey70", vertex.label.cex = 0.5)
 
 #Import MT_edgelist file from Metagenomenets
-MT_edgelist <- read.table("/media/filipe/3D0C60B67437F476/ESALQ_dados/milho_merged_16s/metagenomenets/output/MT_edgelist", header = FALSE)#read file
+MT_edgelist <- read.table("MT_edgelist", header = FALSE)#read file
 MT_edgelist.matrix <- as.matrix(MT_edgelist)
 MT_graph <- graph_from_edgelist(MT_edgelist.matrix, directed = FALSE)
 MT_graph_degree <- degree(MT_graph, mode = "total") #calculate degree
@@ -143,7 +143,7 @@ l <- qgraph.layout.fruchtermanreingold(e,vcount=vcount(MT_graph))
 plot(MT_modules_louvain, MT_graph, col=new_cols, mark.border=HCol, mark.col=HCol, layout=l, vertex.label = ifelse(V(MT_graph)$degree>=50, V(MT_graph)$name, NA), vertex.size=ifelse(V(MT_graph)$degree>=50, 3,3), edge.color="grey70", vertex.label.cex = 0.5)
 
 #Import MN_edgelist file from Metagenomenets
-MN_edgelist <- read.table("/media/filipe/3D0C60B67437F476/ESALQ_dados/milho_merged_16s/metagenomenets/output/MN_edgelist", header = FALSE)#read file
+MN_edgelist <- read.table("MN_edgelist", header = FALSE)#read file
 MN_edgelist.matrix <- as.matrix(MN_edgelist)
 MN_graph <- graph_from_edgelist(MN_edgelist.matrix, directed = FALSE)
 MN_graph_degree <- degree(MN_graph, mode = "total") #calculate degree
@@ -172,7 +172,7 @@ plot(MN_modules_louvain, MN_graph, col=new_cols, mark.border=HCol, mark.col=HCol
 
 
 #Import MO_edgelist file from Metagenomenets
-MO_edgelist <- read.table("/media/filipe/3D0C60B67437F476/ESALQ_dados/milho_merged_16s/metagenomenets/output/MO_edgelist", header = FALSE)#read file
+MO_edgelist <- read.table("MO_edgelist", header = FALSE)#read file
 MO_edgelist.matrix <- as.matrix(MO_edgelist)
 MO_graph <- graph_from_edgelist(MO_edgelist.matrix, directed = FALSE)
 MO_graph_degree <- degree(MO_graph, mode = "total") #calculate degree
@@ -198,36 +198,318 @@ l <- qgraph.layout.fruchtermanreingold(e,vcount=vcount(MO_graph))
 plot(MO_modules_louvain, MO_graph, col=new_cols, mark.border=HCol, mark.col=HCol, layout=l, vertex.label = ifelse(V(MO_graph)$degree>=50, V(MO_graph)$name, NA), vertex.size=ifelse(V(MO_graph)$degree>=50, 3,3), edge.color="grey70", vertex.label.cex = 0.5)
 
 #Random forest models
-#####Using 50% of samples to train farming system model
-#input indicator ASVs for training
-indicator.50.training <- read.table("./train_indicspecies_50percent")
 
-#input 50% samples all ASVs data for validation
-#as tables are too big to transpose in R, use transposer script in bash
-perl transposer.pl 16S_ASV_farming.txt > 16S_ASV_farming_transposed
-grep -Fwf lines_4_validationfile 16S_ASV_farming_transposed > validation_50percent
-indicator.50.validation <- read.table("./validation_50percent")
+library(ggplot2)
+library(vegan)
+library(dplyr)
+library(magrittr)
+library(scales)
+library(grid)
+library(reshape2)
+library(randomForest)
+library(caret)
 
-#run rf model
-indicator.50.rf.data <- randomForest(formula = farming ~ ., data = indicator.50.training,ntree=1000, importance = TRUE) 
-indicator.50.prediction <- predict(indicator.50.rf.data,indicator.50.validation)
-table(observed=indicator.50.validation[,1],predicted=indicator.50.prediction)
+set.seed(1234)
 
-#####Using 50% of samples to train farming system-year model
-#input indicator ASVs for training
-indicator.TY.50.training <- read.table("./TY_train_indicspecies_50percent")
+#input full file and generate training and validation files 0.6/0.4
+FS_ALL <- read.table("all_ASV_table_FS")
+FS_caret_train <- createDataPartition(FS_ALL$farming, p=0.6, list = FALSE)
+FS_caret_training <- FS_ALL[FS_caret_train,]
+FS_caret_validation <- FS_ALL[-FS_caret_train,]
 
-#input 50% samples all ASVs data for validation
-perl transposer.pl 16S_ASV_treatyear > 16S_ASV_treatyear.transposed
-grep -Fwf lines_4_validationfile_TY 16S_ASV_treatyear.transposed > TY_validation_50percent
-indicator.TY.50.validation <- read.table("./TY_validation_50percent")
+#42 samples were assigned to train; 27 to validation
 
-#run rf model
-indicator.TY.50.rf.data <- randomForest(formula = treatyear ~ ., data = indicator.TY.50.training,ntree=1000, importance = TRUE) 
-indicator.TY.50.prediction <- predict(indicator.TY.50.rf.data,indicator.TY.50.validation)
-table(observed=indicator.TY.50.validation[,1],predicted=indicator.TY.50.prediction)
+#train model on full indicspecies dataset of 0.6% of training samples
+FS_rf_caret <- train(farming~., data = FS_caret_training, method = "rf")
+FS_feature_importance <- varImp(FS_rf_caret)
 
+FS_importance_df <- data.frame(FS_feature_importance$importance,feature = rownames(FS_feature_importance$importance))
+FS_top30 <- head(FS_importance_df[order(FS_importance_df[,1],decreasing = T),],n=30) %>%
+  .$feature %>%
+  gsub("`", '', .)  
 
-varImpPlot(indicator.50.rf.data)
-varImpPlot(indicator.TY.50.rf.data)
+# top30 data selection
+FS_top30 <- FS_caret_training[,FS_top30] 
+FS_top30$farming <- FS_caret_training$farming
+
+#train a new model using only best 30 ASVs
+FS_rf_top30 <- train(farming~., data = FS_top30, method = "rf")
+
+#predict accuracy
+FS_top30_pred <- predict(FS_rf_top30, FS_caret_validation)
+confusionMatrix(FS_top30_pred, as.factor(FS_caret_validation$farming))
+
+#repeat to predict treatyear (TY)
+#input full file and generate training and validation files 0.6/0.4
+TY_ALL <- read.table("all_ASV_table_TY")
+TY_caret_train <- createDataPartition(TY_ALL$treatyear, p=0.6, list = FALSE)
+TY_caret_training <- TY_ALL[TY_caret_train,]
+TY_caret_validation <- TY_ALL[-TY_caret_train,]
+
+#46 samples were assigned to train; 23 to validation
+
+#train model on full indicspecies dataset of 0.6% of training samples
+TY_rf_caret <- train(treatyear~., data = TY_caret_training, method = "rf")
+TY_feature_importance <- varImp(TY_rf_caret)
+
+TY_importance_df <- data.frame(TY_feature_importance$importance,feature = rownames(TY_feature_importance$importance))
+TY_top30 <- head(TY_importance_df[order(TY_importance_df[,1],decreasing = T),],n=30) %>%
+  .$feature %>%
+  gsub("`", '', .)  
+
+# top30 data selection
+TY_top30 <- TY_caret_training[,TY_top30] 
+TY_top30$treatyear <- TY_caret_training$treatyear
+
+#train a new model using only best 30 ASVs
+TY_rf_top30 <- train(treatyear~., data = TY_top30, method = "rf")
+
+#predict accuracy
+TY_top30_pred <- predict(TY_rf_top30, TY_caret_validation)
+confusionMatrix(TY_top30_pred, as.factor(TY_caret_validation$treatyear))
+
+####Predict continuous variables
+#Only perform prediction on models at least 50% of R2
+
+#Inorganic N content
+
+#input full file and generate training and validation files 0.6/0.4
+Ninorg_ALL <- read.table("all_ASV_table_Ninorg")
+Ninorg_caret_train <- createDataPartition(Ninorg_ALL$Ninorg, p=0.6, list = FALSE)
+Ninorg_caret_training <- Ninorg_ALL[Ninorg_caret_train,]
+Ninorg_caret_validation <- Ninorg_ALL[-Ninorg_caret_train,]
+
+#44 samples were assigned to train; 25 to validation
+
+#train model on full indicspecies dataset of 0.6% of training samples
+Ninorg_rf_caret <- train(Ninorg ~., data = Ninorg_caret_training, method = "rf", trControl = trainControl("cv", number = 10))
+#rf model with all ASVs had R2 of 3% only
+
+#filter top 30 features
+Ninorg_feature_importance <- varImp(Ninorg_rf_caret)
+Ninorg_importance_df <- data.frame(Ninorg_feature_importance$importance,feature = rownames(Ninorg_feature_importance$importance))
+Ninorg_top30 <- head(Ninorg_importance_df[order(Ninorg_importance_df[,1],decreasing = T),],n=30) %>%
+  .$feature %>%
+  gsub("`", '', .)  
+
+# top30 data selection
+Ninorg_top30 <- Ninorg_caret_training[,Ninorg_top30] 
+Ninorg_top30$Ninorg <- Ninorg_caret_training$Ninorg
+
+Ninorg_rf_top30 <- train(Ninorg ~., data = Ninorg_top30, method = "rf", trControl = trainControl("cv", number = 10))
+
+#Filtered top30 model explained 28.85% of Var of Ninorg values within the model
+#Due to the low inner R2 no prediction was performed for Ninorg values
+
+#Inorganic pH
+#input full file and generate training and validation files 0.6/0.4
+pH_ALL <- read.table("all_ASV_table_pH")
+pH_caret_train <- createDataPartition(pH_ALL$pH, p=0.6, list = FALSE)
+pH_caret_training <- pH_ALL[pH_caret_train,]
+pH_caret_validation <- pH_ALL[-pH_caret_train,]
+
+#43 samples were assigned to train; 26 to validation
+
+#train model on full indicspecies dataset of 0.6% of training samples
+pH_rf_caret <- train(pH ~., data = pH_caret_training, method = "rf", trControl = trainControl("cv", number = 10))
+#rf model with all ASVs had R2 of 87.38%
+
+#filter top 30 features
+pH_feature_importance <- varImp(pH_rf_caret)
+pH_importance_df <- data.frame(pH_feature_importance$importance,feature = rownames(pH_feature_importance$importance))
+pH_top30 <- head(pH_importance_df[order(pH_importance_df[,1],decreasing = T),],n=30) %>%
+  .$feature %>%
+  gsub("`", '', .)  
+
+# top30 data selection
+pH_top30 <- pH_caret_training[,pH_top30] 
+pH_top30$pH <- pH_caret_training$pH
+
+pH_rf_top30 <- train(pH~., data = pH_top30, method = "rf", trControl = trainControl("cv", number = 10))
+#Filtered top30 model explained 91.13% of Var of pH values within the model; proceed to prediction
+
+#predict accuracy
+pH_top30_pred <- predict(pH_rf_top30, pH_caret_validation)
+table(actual_pH=pH_caret_validation[,1],predicted_ph=pH_top30_pred)
+predicted_pH_final <- table(actual_pH=pH_caret_validation[,1],predicted_ph=pH_top30_pred)
+write.table(predicted_pH_final, file = "pH_predicted_actual")
+
+#Betaglucosidase
+#input full file and generate training and validation files 0.6/0.4
+Beta_ALL <- read.table("all_ASV_table_Beta")
+Beta_caret_train <- createDataPartition(Beta_ALL$Beta, p=0.6, list = FALSE)
+Beta_caret_training <- Beta_ALL[Beta_caret_train,]
+Beta_caret_validation <- Beta_ALL[-Beta_caret_train,]
+
+#44 samples were assigned to train; 25 to validation
+
+#train model on full indicspecies dataset of 0.6% of training samples
+Beta_rf_caret <- train(Beta ~., data = Beta_caret_training, method = "rf", trControl = trainControl("cv", number = 10))
+#rf model with all ASVs had R2 of 44.07%
+
+#filter top 30 features
+Beta_feature_importance <- varImp(Beta_rf_caret)
+Beta_importance_df <- data.frame(Beta_feature_importance$importance,feature = rownames(Beta_feature_importance$importance))
+Beta_top30 <- head(Beta_importance_df[order(Beta_importance_df[,1],decreasing = T),],n=30) %>%
+  .$feature %>%
+  gsub("`", '', .)  
+
+# top30 data selection
+Beta_top30 <- Beta_caret_training[,Beta_top30] 
+Beta_top30$Beta <- Beta_caret_training$Beta
+
+Beta_rf_top30 <- train(Beta~., data = Beta_top30, method = "rf", trControl = trainControl("cv", number = 10))
+#Filtered top30 model explained 54.43% of Var of Beta values within the model; proceed to prediction
+
+#predict accuracy
+Beta_top30_pred <- predict(Beta_rf_top30, Beta_caret_validation)
+table(actual_Beta=Beta_caret_validation[,1],predicted_Beta=Beta_top30_pred)
+predicted_Beta_final <- table(actual_Beta=Beta_caret_validation[,1],predicted_Beta=Beta_top30_pred)
+write.table(predicted_Beta_final, file = "Beta_predicted_actual")
+
+#CNinorg
+#input full file and generate training and validation files 0.6/0.4
+CNinorg_ALL <- read.table("all_ASV_table_CNinorg")
+CNinorg_caret_train <- createDataPartition(CNinorg_ALL$CNinorg, p=0.6, list = FALSE)
+CNinorg_caret_training <- CNinorg_ALL[CNinorg_caret_train,]
+CNinorg_caret_validation <- CNinorg_ALL[-CNinorg_caret_train,]
+
+#44 samples were assigned to train; 25 to validation
+
+#train model on full indicspecies dataset of 0.6% of training samples
+CNinorg_rf_caret <- train(CNinorg~., data = CNinorg_caret_training, method = "rf", trControl = trainControl("cv", number = 10))
+#rf model with all ASVs had R2 of 0%
+#Due to the low inner R2 no prediction was performed for CNinorg values
+
+#Ktotal
+Ktot_ALL <- read.table("all_ASV_table_Ktot")
+Ktot_caret_train <- createDataPartition(Ktot_ALL$Ktot, p=0.6, list = FALSE)
+Ktot_caret_training <- Ktot_ALL[Ktot_caret_train,]
+Ktot_caret_validation <- Ktot_ALL[-Ktot_caret_train,]
+
+#44 samples were assigned to train; 25 to validation
+
+#train model on full indicspecies dataset of 0.6% of training samples
+Ktot_rf_caret <- train(Ktot~., data = Ktot_caret_training, method = "rf", trControl = trainControl("cv", number = 10))
+#rf model with all ASVs had R2 of 57.49%
+
+#filter top 30 features
+Ktot_feature_importance <- varImp(Ktot_rf_caret)
+Ktot_importance_df <- data.frame(Ktot_feature_importance$importance,feature = rownames(Ktot_feature_importance$importance))
+Ktot_top30 <- head(Ktot_importance_df[order(Ktot_importance_df[,1],decreasing = T),],n=30) %>%
+  .$feature %>%
+  gsub("`", '', .)  
+
+# top30 data selection
+Ktot_top30 <- Ktot_caret_training[,Ktot_top30] 
+Ktot_top30$Ktot <- Ktot_caret_training$Ktot
+
+Ktot_rf_top30 <- train(Ktot~., data = Ktot_top30, method = "rf", trControl = trainControl("cv", number = 10))
+#Filtered top30 model explained 68.92% of Var of Ktot values within the model; proceed to prediction
+
+#predict accuracy
+Ktot_top30_pred <- predict(Ktot_rf_top30, Ktot_caret_validation)
+table(actual_Ktot=Ktot_caret_validation[,1],predicted_Ktot=Ktot_top30_pred)
+predicted_Ktot_final <- table(actual_Ktot=Ktot_caret_validation[,1],predicted_Ktot=Ktot_top30_pred)
+write.table(predicted_Ktot_final, file = "Ktot_predicted_actual")
+
+#Ptot
+Ptot_ALL <- read.table("all_ASV_table_Ptot")
+Ptot_caret_train <- createDataPartition(Ptot_ALL$Ptot, p=0.6, list = FALSE)
+Ptot_caret_training <- Ptot_ALL[Ptot_caret_train,]
+Ptot_caret_validation <- Ptot_ALL[-Ptot_caret_train,]
+
+#43 samples were assigned to train; 26 to validation
+
+#train model on full indicspecies dataset of 0.6% of training samples
+Ptot_rf_caret <- train(Ptot~., data = Ptot_caret_training, method = "rf", trControl = trainControl("cv", number = 10))
+#rf model with all ASVs had R2 of 42.56%
+
+#filter top 30 features
+Ptot_feature_importance <- varImp(Ptot_rf_caret)
+Ptot_importance_df <- data.frame(Ptot_feature_importance$importance,feature = rownames(Ptot_feature_importance$importance))
+Ptot_top30 <- head(Ptot_importance_df[order(Ptot_importance_df[,1],decreasing = T),],n=30) %>%
+  .$feature %>%
+  gsub("`", '', .)  
+
+# top30 data selection
+Ptot_top30 <- Ptot_caret_training[,Ptot_top30] 
+Ptot_top30$Ptot <- Ptot_caret_training$Ptot
+
+Ptot_rf_top30 <- train(Ptot~., data = Ptot_top30, method = "rf", trControl = trainControl("cv", number = 10))
+#Filtered top30 model explained 45.26% of Var of Ptot values within the model; Prediction not done
+
+#OM
+OM_ALL <- read.table("all_ASV_table_OM")
+OM_caret_train <- createDataPartition(OM_ALL$OM, p=0.6, list = FALSE)
+OM_caret_training <- OM_ALL[OM_caret_train,]
+OM_caret_validation <- OM_ALL[-OM_caret_train,]
+
+#43 samples were assigned to train; 26 to validation
+#train model on full indicspecies dataset of 0.6% of training samples
+OM_rf_caret <- train(OM~., data = OM_caret_training, method = "rf", trControl = trainControl("cv", number = 10))
+#rf model with all ASVs had R2 of 0%
+#Due to the low inner R2 no prediction was performed for OM values
+
+#Palk
+Palk_ALL <- read.table("all_ASV_table_Palk")
+Palk_caret_train <- createDataPartition(Palk_ALL$Palk, p=0.6, list = FALSE)
+Palk_caret_training <- Palk_ALL[Palk_caret_train,]
+Palk_caret_validation <- Palk_ALL[-Palk_caret_train,]
+
+#44 samples were assigned to train; 25 to validation
+#train model on full indicspecies dataset of 0.6% of training samples
+Palk_rf_caret <- train(Palk~., data = Palk_caret_training, method = "rf", trControl = trainControl("cv", number = 10))
+#rf model with all ASVs had R2 of 67.28%
+
+#filter top 30 features
+Palk_feature_importance <- varImp(Palk_rf_caret)
+Palk_importance_df <- data.frame(Palk_feature_importance$importance,feature = rownames(Palk_feature_importance$importance))
+Palk_top30 <- head(Palk_importance_df[order(Palk_importance_df[,1],decreasing = T),],n=30) %>%
+  .$feature %>%
+  gsub("`", '', .)  
+
+# top30 data selection
+Palk_top30 <- Palk_caret_training[,Palk_top30] 
+Palk_top30$Palk <- Palk_caret_training$Palk
+
+Palk_rf_top30 <- train(Palk~., data = Palk_top30, method = "rf", trControl = trainControl("cv", number = 10))
+#Filtered top30 model explained 73.54% of Var of Palk values within the model; proceed to prediction
+
+#predict accuracy
+Palk_top30_pred <- predict(Palk_rf_top30, Palk_caret_validation)
+table(actual_Palk=Palk_caret_validation[,1],predicted_Palk=Palk_top30_pred)
+predicted_Palk_final <- table(actual_Palk=Palk_caret_validation[,1],predicted_Palk=Palk_top30_pred)
+write.table(predicted_Palk_final, file = "Palk_predicted_actual")
+
+#Pac
+Pac_ALL <- read.table("all_ASV_table_Pac")
+Pac_caret_train <- createDataPartition(Pac_ALL$Pac, p=0.6, list = FALSE)
+Pac_caret_training <- Pac_ALL[Pac_caret_train,]
+Pac_caret_validation <- Pac_ALL[-Pac_caret_train,]
+
+#44 samples were assigned to train; 25 to validation
+#train model on full indicspecies dataset of 0.6% of training samples
+Pac_rf_caret <- train(Pac~., data = Pac_caret_training, method = "rf", trControl = trainControl("cv", number = 10))
+#rf model with all ASVs had R2 of 56.03%
+
+#filter top 30 features
+Pac_feature_importance <- varImp(Pac_rf_caret)
+Pac_importance_df <- data.frame(Pac_feature_importance$importance,feature = rownames(Pac_feature_importance$importance))
+Pac_top30 <- head(Pac_importance_df[order(Pac_importance_df[,1],decreasing = T),],n=30) %>%
+  .$feature %>%
+  gsub("`", '', .)  
+
+# top30 data selection
+Pac_top30 <- Pac_caret_training[,Pac_top30] 
+Pac_top30$Pac <- Pac_caret_training$Pac
+
+Pac_rf_top30 <- train(Pac~., data = Pac_top30, method = "rf", trControl = trainControl("cv", number = 10))
+#Filtered top30 model explained 66.78% of Var of Pac values within the model; proceed to prediction
+
+#predict accuracy
+Pac_top30_pred <- predict(Pac_rf_top30, Pac_caret_validation)
+table(actual_Pac=Pac_caret_validation[,1],predicted_Pac=Palk_top30_pred)
+predicted_Pac_final <- table(actual_Pac=Pac_caret_validation[,1],predicted_Pac=Pac_top30_pred)
+write.table(predicted_Pac_final, file = "Pac_predicted_actual")
 
