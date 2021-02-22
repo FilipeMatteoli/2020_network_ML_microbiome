@@ -3,9 +3,6 @@ library(indicspecies)
 library(igraph)
 library(RColorBrewer)
 library(ggraph)
-library(metagMisc)
-library(indicspecies)
-library(igraph)
 library(qgraph)
 library(vegan)
 library(MCL)
@@ -18,6 +15,8 @@ library(grid)
 library(reshape2)
 library(randomForest)
 library(caret)
+library(ggiraphExtra)
+library(ggiraph)
 
 ##### Import Data #####
 ps <- import_biom(feature-table.biom)
@@ -237,7 +236,36 @@ FS_rf_top30 <- train(farming~., data = FS_top30, method = "rf")
 
 #predict accuracy
 FS_top30_pred <- predict(FS_rf_top30, FS_caret_validation)
-confusionMatrix(FS_top30_pred, as.factor(FS_caret_validation$farming))
+
+#define generic plotting function
+plot_confusion_matrix<-function(Actual,Predict,colors=c("white","red4","dodgerblue3"),text.scl=5){
+    actual = as.data.frame(table(Actual))
+    names(actual) = c("Actual","ActualFreq")
+    
+    #build confusion matrix
+    confusion = as.data.frame(table(Actual, Predict))
+    names(confusion) = c("Actual","Predicted","Freq")
+    
+    #calculate percentage of test cases based on actual frequency
+    
+    confusion = merge(confusion, actual, by=c('Actual','Actual'))
+    confusion$Percent = confusion$Freq/confusion$ActualFreq*100
+    confusion$ColorScale<-confusion$Percent*-1
+    confusion[which(confusion$Actual==confusion$Predicted),]$ColorScale<-confusion[which(confusion$Actual==confusion$Predicted),]$ColorScale*-1
+    confusion$Label<-paste(round(confusion$Percent,0),"%")
+    tile <- ggplot() +
+        geom_tile(aes(x=Actual, y=Predicted,fill=ColorScale),data=confusion, color="black",size=0.1) +
+        labs(x="Actual",y="Predicted")
+    
+    tile = tile +
+        geom_text(aes(x=Actual,y=Predicted, label=Label),data=confusion, size=text.scl, colour="black") +
+        scale_fill_gradient2(low=colors[2],high=colors[3],mid=colors[1],midpoint = 0,guide='none')
+}
+
+Actual <- FS_caret_validation$farming
+Predict <- FS_top30_pred
+(plot_confusion_matrix(Actual = Actual, Predict = Predict))
+
 
 #repeat to predict treatyear (TY)
 #input full file and generate training and validation files 0.6/0.4
@@ -266,7 +294,10 @@ TY_rf_top30 <- train(treatyear~., data = TY_top30, method = "rf")
 
 #predict accuracy
 TY_top30_pred <- predict(TY_rf_top30, TY_caret_validation)
-confusionMatrix(TY_top30_pred, as.factor(TY_caret_validation$treatyear))
+
+Actual <- TY_caret_validation$treatyear
+Predict <- TY_top30_pred
+(plot_confusion_matrix(Actual = Actual, Predict = Predict))
 
 ####Predict continuous variables
 #Only perform prediction on models at least 50% of R2
@@ -300,39 +331,6 @@ Ninorg_rf_top30 <- train(Ninorg ~., data = Ninorg_top30, method = "rf", trContro
 
 #Filtered top30 model explained 28.85% of Var of Ninorg values within the model
 #Due to the low inner R2 no prediction was performed for Ninorg values
-
-#Inorganic pH
-#input full file and generate training and validation files 0.6/0.4
-pH_ALL <- read.table("all_ASV_table_pH")
-pH_caret_train <- createDataPartition(pH_ALL$pH, p=0.6, list = FALSE)
-pH_caret_training <- pH_ALL[pH_caret_train,]
-pH_caret_validation <- pH_ALL[-pH_caret_train,]
-
-#43 samples were assigned to train; 26 to validation
-
-#train model on full indicspecies dataset of 0.6% of training samples
-pH_rf_caret <- train(pH ~., data = pH_caret_training, method = "rf", trControl = trainControl("cv", number = 10))
-#rf model with all ASVs had R2 of 87.38%
-
-#filter top 30 features
-pH_feature_importance <- varImp(pH_rf_caret)
-pH_importance_df <- data.frame(pH_feature_importance$importance,feature = rownames(pH_feature_importance$importance))
-pH_top30 <- head(pH_importance_df[order(pH_importance_df[,1],decreasing = T),],n=30) %>%
-  .$feature %>%
-  gsub("`", '', .)  
-
-# top30 data selection
-pH_top30 <- pH_caret_training[,pH_top30] 
-pH_top30$pH <- pH_caret_training$pH
-
-pH_rf_top30 <- train(pH~., data = pH_top30, method = "rf", trControl = trainControl("cv", number = 10))
-#Filtered top30 model explained 91.13% of Var of pH values within the model; proceed to prediction
-
-#predict accuracy
-pH_top30_pred <- predict(pH_rf_top30, pH_caret_validation)
-table(actual_pH=pH_caret_validation[,1],predicted_ph=pH_top30_pred)
-predicted_pH_final <- table(actual_pH=pH_caret_validation[,1],predicted_ph=pH_top30_pred)
-write.table(predicted_pH_final, file = "pH_predicted_actual")
 
 #Betaglucosidase
 #input full file and generate training and validation files 0.6/0.4
@@ -381,38 +379,6 @@ CNinorg_rf_caret <- train(CNinorg~., data = CNinorg_caret_training, method = "rf
 #rf model with all ASVs had R2 of 0%
 #Due to the low inner R2 no prediction was performed for CNinorg values
 
-#Ktotal
-Ktot_ALL <- read.table("all_ASV_table_Ktot")
-Ktot_caret_train <- createDataPartition(Ktot_ALL$Ktot, p=0.6, list = FALSE)
-Ktot_caret_training <- Ktot_ALL[Ktot_caret_train,]
-Ktot_caret_validation <- Ktot_ALL[-Ktot_caret_train,]
-
-#44 samples were assigned to train; 25 to validation
-
-#train model on full indicspecies dataset of 0.6% of training samples
-Ktot_rf_caret <- train(Ktot~., data = Ktot_caret_training, method = "rf", trControl = trainControl("cv", number = 10))
-#rf model with all ASVs had R2 of 57.49%
-
-#filter top 30 features
-Ktot_feature_importance <- varImp(Ktot_rf_caret)
-Ktot_importance_df <- data.frame(Ktot_feature_importance$importance,feature = rownames(Ktot_feature_importance$importance))
-Ktot_top30 <- head(Ktot_importance_df[order(Ktot_importance_df[,1],decreasing = T),],n=30) %>%
-  .$feature %>%
-  gsub("`", '', .)  
-
-# top30 data selection
-Ktot_top30 <- Ktot_caret_training[,Ktot_top30] 
-Ktot_top30$Ktot <- Ktot_caret_training$Ktot
-
-Ktot_rf_top30 <- train(Ktot~., data = Ktot_top30, method = "rf", trControl = trainControl("cv", number = 10))
-#Filtered top30 model explained 68.92% of Var of Ktot values within the model; proceed to prediction
-
-#predict accuracy
-Ktot_top30_pred <- predict(Ktot_rf_top30, Ktot_caret_validation)
-table(actual_Ktot=Ktot_caret_validation[,1],predicted_Ktot=Ktot_top30_pred)
-predicted_Ktot_final <- table(actual_Ktot=Ktot_caret_validation[,1],predicted_Ktot=Ktot_top30_pred)
-write.table(predicted_Ktot_final, file = "Ktot_predicted_actual")
-
 #Ptot
 Ptot_ALL <- read.table("all_ASV_table_Ptot")
 Ptot_caret_train <- createDataPartition(Ptot_ALL$Ptot, p=0.6, list = FALSE)
@@ -451,6 +417,72 @@ OM_rf_caret <- train(OM~., data = OM_caret_training, method = "rf", trControl = 
 #rf model with all ASVs had R2 of 0%
 #Due to the low inner R2 no prediction was performed for OM values
 
+#pH
+#input full file and generate training and validation files 0.6/0.4
+pH_ALL <- read.table("all_ASV_table_pH")
+pH_caret_train <- createDataPartition(pH_ALL$pH, p=0.6, list = FALSE)
+pH_caret_training <- pH_ALL[pH_caret_train,]
+pH_caret_validation <- pH_ALL[-pH_caret_train,]
+
+#43 samples were assigned to train; 26 to validation
+
+#train model on full indicspecies dataset of 0.6% of training samples
+pH_rf_caret <- train(pH ~., data = pH_caret_training, method = "rf", trControl = trainControl("cv", number = 10))
+#rf model with all ASVs had R2 of 87.38%
+
+#filter top 30 features
+pH_feature_importance <- varImp(pH_rf_caret)
+pH_importance_df <- data.frame(pH_feature_importance$importance,feature = rownames(pH_feature_importance$importance))
+pH_top30 <- head(pH_importance_df[order(pH_importance_df[,1],decreasing = T),],n=30) %>%
+  .$feature %>%
+  gsub("`", '', .)  
+
+# top30 data selection
+pH_top30 <- pH_caret_training[,pH_top30] 
+pH_top30$pH <- pH_caret_training$pH
+
+pH_rf_top30 <- train(pH~., data = pH_top30, method = "rf", trControl = trainControl("cv", number = 10))
+#Filtered top30 model explained 91.13% of Var of pH values within the model; proceed to prediction
+
+#predict accuracy
+actual_pH <- pH_caret_validation[,1]
+pH_top30_pred <- predict(pH_rf_top30, pH_caret_validation)
+lm(formula = actual_pH ~ pH_top30_pred)
+fit_pH = lm(formula = actual_pH ~ pH_top30_pred)
+
+
+#Ktotal
+Ktot_ALL <- read.table("all_ASV_table_Ktot")
+Ktot_caret_train <- createDataPartition(Ktot_ALL$Ktot, p=0.6, list = FALSE)
+Ktot_caret_training <- Ktot_ALL[Ktot_caret_train,]
+Ktot_caret_validation <- Ktot_ALL[-Ktot_caret_train,]
+
+#44 samples were assigned to train; 25 to validation
+
+#train model on full indicspecies dataset of 0.6% of training samples
+Ktot_rf_caret <- train(Ktot~., data = Ktot_caret_training, method = "rf", trControl = trainControl("cv", number = 10))
+#rf model with all ASVs had R2 of 57.49%
+
+#filter top 30 features
+Ktot_feature_importance <- varImp(Ktot_rf_caret)
+Ktot_importance_df <- data.frame(Ktot_feature_importance$importance,feature = rownames(Ktot_feature_importance$importance))
+Ktot_top30 <- head(Ktot_importance_df[order(Ktot_importance_df[,1],decreasing = T),],n=30) %>%
+  .$feature %>%
+  gsub("`", '', .)  
+
+# top30 data selection
+Ktot_top30 <- Ktot_caret_training[,Ktot_top30] 
+Ktot_top30$Ktot <- Ktot_caret_training$Ktot
+
+Ktot_rf_top30 <- train(Ktot~., data = Ktot_top30, method = "rf", trControl = trainControl("cv", number = 10))
+#Filtered top30 model explained 68.92% of Var of Ktot values within the model; proceed to prediction
+
+#predict accuracy
+actual_Ktot <- Ktot_caret_validation[,1]
+Ktot_top30_pred <- predict(Ktot_rf_top30, Ktot_caret_validation)
+lm(formula = actual_Ktot ~ Ktot_top30_pred)
+fit_Ktot = lm(formula = actual_Ktot ~ Ktot_top30_pred)
+
 #Palk
 Palk_ALL <- read.table("all_ASV_table_Palk")
 Palk_caret_train <- createDataPartition(Palk_ALL$Palk, p=0.6, list = FALSE)
@@ -477,10 +509,10 @@ Palk_rf_top30 <- train(Palk~., data = Palk_top30, method = "rf", trControl = tra
 #Filtered top30 model explained 73.54% of Var of Palk values within the model; proceed to prediction
 
 #predict accuracy
-Palk_top30_pred <- predict(Palk_rf_top30, Palk_caret_validation)
-table(actual_Palk=Palk_caret_validation[,1],predicted_Palk=Palk_top30_pred)
-predicted_Palk_final <- table(actual_Palk=Palk_caret_validation[,1],predicted_Palk=Palk_top30_pred)
-write.table(predicted_Palk_final, file = "Palk_predicted_actual")
+actual_Palk <- Palk_caret_validation[,1]
+Palk_top30_pred  <- predict(Palk_rf_top30, Palk_caret_validation)
+lm(formula = actual_Palk ~ Palk_top30_pred)
+fit_Palk = lm(formula = actual_Palk ~ Palk_top30_pred)
 
 #Pac
 Pac_ALL <- read.table("all_ASV_table_Pac")
@@ -508,8 +540,26 @@ Pac_rf_top30 <- train(Pac~., data = Pac_top30, method = "rf", trControl = trainC
 #Filtered top30 model explained 66.78% of Var of Pac values within the model; proceed to prediction
 
 #predict accuracy
-Pac_top30_pred <- predict(Pac_rf_top30, Pac_caret_validation)
-table(actual_Pac=Pac_caret_validation[,1],predicted_Pac=Palk_top30_pred)
-predicted_Pac_final <- table(actual_Pac=Pac_caret_validation[,1],predicted_Pac=Pac_top30_pred)
-write.table(predicted_Pac_final, file = "Pac_predicted_actual")
+actual_Pac <- Pac_caret_validation[,1]
+Pac_top30_pred  <- predict(Pac_rf_top30, Pac_caret_validation)
+lm(formula = actual_Pac ~ Pac_top30_pred)
+fit_Pac = lm(formula = actual_Pac ~ Pac_top30_pred)
+
+
+ggplotRegression <- function (fit) {
+     
+     require(ggplot2)
+     
+     ggplot(fit$model, aes_string(x = names(fit$model)[2], y = names(fit$model)[1])) + 
+         geom_point() +
+         stat_smooth(method = "lm", col = "black", se= FALSE) +
+         labs(title = paste("Adj R2 = ",signif(summary(fit)$adj.r.squared, 5),
+                            "Intercept =",signif(fit$coef[[1]],5 ),
+                            " Slope =",signif(fit$coef[[2]], 5),
+                            " P =",signif(summary(fit)$coef[2,4], 5)))
+}
+ggplotRegression(fit_pH)
+ggplotRegression(fit_Ktot)
+ggplotRegression(fit_Palk)
+ggplotRegression(fit_Pac)
 
